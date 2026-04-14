@@ -446,6 +446,32 @@ Expected status codes: `200`, `400`, `401`, `403`, `404`, `429`
 - Re-scheduling and create flows should require an `Idempotency-Key` so clients can safely retry after timeouts.
 - SDK and CLI behavior should mirror server validation: reject malformed cron strings, invalid JSON payloads, and tokens missing the expected tenant claims before sending the request.
 
+### SDK and CLI expectations
+
+The TypeScript SDK and any future `hestia` CLI should enforce the same guardrails before a request leaves the client:
+- validate cron expressions locally and surface the bad field in the error message
+- verify payloads are valid JSON objects before serialization
+- require tenant context before making tenant-scoped calls
+- require an idempotency key for create and reschedule operations
+- fail fast when the token claims do not match the requested tenant scope
+
+Illustrative CLI flows:
+
+```bash
+hestia job create \
+  --tenant acme-corp \
+  --name send-invoice \
+  --cron "0 9 * * *" \
+  --payload '{"tenantId":"acme-corp","template":"invoice-reminder"}' \
+  --max-retries 3
+
+hestia job history \
+  --tenant acme-corp \
+  --job-id job_01HV8J3M8P6A6R5T9K1Q \
+  --page 1 \
+  --limit 20
+```
+
 Sample tenant mismatch error:
 
 ```json
@@ -501,6 +527,94 @@ Verify that:
 - repeating the same request with the same idempotency key does not create a duplicate job
 - sending `X-Tenant-ID: other-tenant` returns the documented `tenant_mismatch` error
 - sending an invalid cron string returns the documented validation error
+
+Additional Sprint 2 checks:
+- call `GET /jobs?page=1&limit=20` and confirm pagination metadata is present
+- call `GET /jobs/:id/history` and confirm attempts are tenant-scoped
+- retry a `PATCH /jobs/:id` with the same idempotency key and confirm the server does not create a divergent update
+
+## Scheduler Reliability
+
+### Leader election mechanics
+
+The scheduler uses Redis for leader election with a lock pattern equivalent to `SET scheduler:leader <instance-id> NX PX 10000`.
+- lock TTL: `10000ms`
+- renewal cadence: renew every `6000ms` so the active leader refreshes before 60 percent of the TTL elapses
+- failure detection: if renewal fails or Redis reports the key now belongs to another instance, the current leader stops dispatching immediately
+- failover path: waiting instances retry lock acquisition, the next successful instance records a new leadership event, and cron ticks resume on that node
+
+Expected logs and metrics during leadership changes:
+- info log when leadership is acquired, renewed, or lost
+- `scheduler_leader_elections_total{instance_id="...",result="acquired"}` increments on each successful election
+- traces should show the leader instance attached to tick and dispatch spans
+
+### Cron tick and dispatch flow
+
+Each scheduler tick should follow this sequence:
+1. The current leader fires the cron tick for the active schedule window.
+2. PostgreSQL is queried for due jobs using tenant-aware filters and `next_run_at`.
+3. For each due job, Redis lock `LOCK:<job_id>` is acquired before dispatch begins.
+4. The scheduler generates an idempotency key for the attempt and sends the payload to the appropriate worker over gRPC.
+5. The worker acknowledges acceptance or returns a synchronous error.
+6. PostgreSQL event log rows are written for `RUNNING`, terminal status, retry status, duration, and failure reason.
+7. The job lock is released once the attempt is durably recorded.
+
+If PostgreSQL returns a deadlock or write failure:
+- log the database error with the job id and attempt number
+- release or expire the Redis job lock safely
+- mark the in-memory attempt as failed and retry according to policy once persistence is available again
+
+If the worker crashes or becomes unreachable after lock acquisition:
+- record a failed attempt in the event log when possible
+- transition the job into `FAILED` or `RETRYING` based on remaining retries
+- do not dispatch the same job again until the lock expires or is explicitly released
+
+### Retry state machine and backoff
+
+The retry state machine should remain explicit:
+- `PENDING -> RUNNING -> SUCCESS`
+- `PENDING -> RUNNING -> FAILED -> RETRYING -> RUNNING`
+- terminal failure occurs when the final retry budget is exhausted
+
+Backoff policy:
+- base delay comes from job retry configuration
+- exponential formula: `delay = base * 2^(attempt-1)`
+- jitter adds a bounded random spread so many failing jobs do not re-fire simultaneously
+- `maxRetries` is enforced server-side even if a client sends larger values than the service policy allows
+
+Suggested event log fields for each attempt:
+- `job_id`
+- `tenant_id`
+- `attempt`
+- `status`
+- `started_at`
+- `finished_at`
+- `duration_ms`
+- `failure_reason`
+- `idempotency_key`
+
+### Operational thresholds and optimization notes
+
+Recommended metrics and thresholds:
+- alert when `scheduler_leader_elections_total` exceeds `1` per minute for a stable cluster
+- investigate when `scheduler_retry_attempts_total` rises to three times the normal baseline
+- investigate when `scheduler_job_duration_seconds` exceeds the configured SLA percentile for a job class
+- watch dispatch latency between tick time and worker acknowledgment
+
+Storage and runtime notes:
+- PostgreSQL index on jobs: `(tenant_id, next_run_at)`
+- PostgreSQL index on event log: `(job_id, attempt)`
+- Redis connection pooling should be sized to handle concurrent lock and renewal traffic without starving leader renewal
+- worker gRPC deadlines should be shorter than lock TTL renewals so dead workers do not pin dispatch slots forever
+
+### Sprint 3 verification
+
+Use these checks to validate the reliability story:
+1. Stop the current leader and confirm another scheduler acquires leadership within the lock TTL window.
+2. Run a job that forces a worker failure and confirm a single retry chain appears in the event log with no duplicate successful execution.
+3. Simulate Redis instability and confirm the leader stops dispatching when lock renewal fails.
+4. Inspect metrics for leader election count, dispatch latency, retry count, and job duration after each failure scenario.
+5. Confirm traces include scheduler instance id, job id, tenant id, worker type, and terminal status.
 
 ## Key Design Decisions
 

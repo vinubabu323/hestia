@@ -82,6 +82,16 @@ Migration and seed steps that must be present in README:
 - Hand-off note: reviewer should validate line references again after any later README edits that move sections.
 
 ## Sprint 2 - API reference & RBAC edge cases
+### Status
+- Completed in README.
+- Coverage now includes endpoint-by-endpoint request and response shapes, status codes, pagination, tenant isolation, RBAC expectations, validation rules, idempotency guidance, SDK or CLI expectations, and manual verification steps.
+- README references for Sprint 2:
+  - Jobs API details: `README.md:184`
+  - Tenant API details: `README.md:360`
+  - RBAC, validation, and SDK or CLI expectations: `README.md:437`
+  - Sprint 2 verification steps: `README.md:514`
+
+### Delivered scope
 1. **API request/response spec:** For each endpoint in README (jobs CRUD, job history, tenants), document:
    - HTTP method and path
    - Required headers (Authorization, X-Tenant-ID)
@@ -93,6 +103,15 @@ Migration and seed steps that must be present in README:
 4. **Validation & idempotency:** Note that job definitions go through cron parsing (reject invalid expressions), enforce `maxRetries`, and require idempotency keys when re-scheduling; mention the SDK/CLI should reject invalid payloads/client-side and describe the manual test steps (`curl POST /jobs` with sample body, check response for job ID, retry). In this section, add a subsection summarizing `@vinubabu/hestia-sdk` expectations (client should validate cron, JSON schema, check RBAC claims) and CLI tests (e.g., `hestia job create ...`).
 
 ## Sprint 3 - Scheduler + worker reliability story
+### Status
+- Completed in README.
+- Coverage now includes leader election lock behavior, renewal cadence, failover handling, cron tick and dispatch sequence, retry FSM details, operational thresholds, and verification steps.
+- README references for Sprint 3:
+  - Leader election and dispatch narrative: `README.md:538`
+  - Retry and backoff details: `README.md:572`
+  - Metrics, thresholds, and verification checklist: `README.md:596`
+
+### Delivered scope
 1. **Leader election detail:** Document Redis usage (`SET key NX PX 10000`), TTL renewal cadence (renew at 60% of TTL), failure detection (if renew fails, release lock and promote failover), and metrics to confirm single leader (`scheduler_leader_elections_total` with labels). Include failure handling steps (acquire new lock, log info, notify metric).
 2. **Cron tick + dispatch flow:** Sequence each step - leader fires tick, queries Postgres for due jobs, acquires distributed lock per job (`LOCK:<job_id>`), calls gRPC worker, handles worker response, updates Postgres event log. Define retry FSM transitions, explain exponential backoff with jitter calculation, and note what happens on Postgres deadlock or worker crash (log error, release lock, mark job `FAILED`).
 3. **Instrumentation/optimizations:** Capture metric thresholds (e.g., alert if `scheduler_retry_attempts_total` increases 3x baseline, or if job duration > configured SLA). Mention Postgres indexes (jobs `(tenant_id, next_run_at)`, event log `(job_id, attempt)`) and Redis connection pooling as optimization notes.

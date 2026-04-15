@@ -1,0 +1,12 @@
+{
+  "name": "hestia",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/run-all.mjs",
+    "start:api": "node management-api/server.js",
+    "start:scheduler": "node scheduler/server.js",
+    "start:worker": "node workers/mock-worker/server.js"
+  }
+}

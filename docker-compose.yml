@@ -1,0 +1,50 @@
+services:
+  management-api:
+    image: node:22-alpine
+    working_dir: /app
+    command: ["node", "management-api/server.js"]
+    env_file:
+      - .env
+    environment:
+      DATA_FILE: /app/data/hestia.json
+      API_PORT: 3000
+      WORKER_URL: http://worker:4100
+    volumes:
+      - ./:/app
+    ports:
+      - "3000:3000"
+    depends_on:
+      - worker
+
+  scheduler:
+    image: node:22-alpine
+    working_dir: /app
+    command: ["node", "scheduler/server.js"]
+    env_file:
+      - .env
+    environment:
+      DATA_FILE: /app/data/hestia.json
+      API_PORT: 3000
+      GRPC_PORT: 4000
+      WORKER_URL: http://worker:4100
+    volumes:
+      - ./:/app
+    ports:
+      - "4000:4000"
+    depends_on:
+      - management-api
+      - worker
+
+  worker:
+    image: node:22-alpine
+    working_dir: /app
+    command: ["node", "workers/mock-worker/server.js"]
+    env_file:
+      - .env
+    environment:
+      DATA_FILE: /app/data/hestia.json
+      WORKER_PORT: 4100
+    volumes:
+      - ./:/app
+    ports:
+      - "4100:4100"

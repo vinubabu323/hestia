@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Hestia Dashboard</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="page">
+      <header class="topbar">
+        <div>
+          <h1>Hestia</h1>
+          <p>Jobs, tenants, and scheduler state in one place.</p>
+        </div>
+        <div class="topbar-actions">
+          <nav class="view-nav">
+            <button id="homeTab" type="button" class="secondary">Home</button>
+            <button id="historyTab" type="button" class="secondary">Job History</button>
+          </nav>
+          <button id="refreshButton" type="button">Refresh</button>
+        </div>
+      </header>
+
+      <section class="controls">
+        <label>
+          <span>Bearer token</span>
+          <input id="tokenInput" type="text" value="admin-token" autocomplete="off">
+        </label>
+        <label>
+          <span>Tenant</span>
+          <select id="tenantSelect"></select>
+        </label>
+        <label>
+          <span>Idempotency key</span>
+          <input id="idempotencyInput" type="text" value="">
+        </label>
+      </section>
+
+      <section class="stats" id="statsGrid"></section>
+
+      <main id="homeView">
+        <section class="main-grid">
+          <div class="panel">
+            <div class="panel-heading">
+              <h2>Schedulers</h2>
+            </div>
+            <div id="schedulerPanel" class="stack"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-heading">
+              <h2>Create Tenant</h2>
+            </div>
+            <form id="tenantForm" class="stack">
+              <input name="name" type="text" placeholder="Acme Corp" required>
+              <input name="slug" type="text" placeholder="acme-corp" required>
+              <input name="rateLimitPerMinute" type="number" min="1" value="120" required>
+              <button type="submit">Create Tenant</button>
+            </form>
+          </div>
+        </section>
+
+        <section class="main-grid">
+          <div class="panel">
+            <div class="panel-heading">
+              <h2>Create Job</h2>
+            </div>
+            <form id="jobForm" class="stack">
+              <input name="name" type="text" placeholder="heartbeat" required>
+              <select name="executionMode" id="executionModeSelect">
+                <option value="cron">Recurring Cron Job</option>
+                <option value="queue">One-Time Queue Job</option>
+              </select>
+              <input name="cron" type="text" placeholder="@every 10s" value="@every 10s" required>
+              <input name="runAt" id="runAtInput" type="datetime-local">
+              <input name="maxRetries" type="number" min="1" max="10" value="3" required>
+              <input name="retryBackoffSeconds" type="number" min="1" value="1" required>
+              <textarea name="payload" rows="7" required>{"message":"hello from dashboard"}</textarea>
+              <button type="submit">Create Job</button>
+            </form>
+          </div>
+
+          <div class="panel">
+            <div class="panel-heading">
+              <h2>Jobs</h2>
+              <button id="viewAllJobsButton" type="button" class="secondary">View All Job History</button>
+            </div>
+            <div id="jobsTable" class="table-wrap"></div>
+          </div>
+        </section>
+      </main>
+
+      <main id="historyView" hidden>
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Job History</h2>
+            <select id="jobSelect"></select>
+          </div>
+          <div id="jobDetailsPanel" class="details-grid empty">Pick a job to inspect its details.</div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>Attempts</h2>
+          </div>
+          <div id="historyPanel" class="history-list empty">Pick a job to load history.</div>
+        </section>
+      </main>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <h2>Response Log</h2>
+        </div>
+        <pre id="logPanel" class="log-panel">Ready.</pre>
+      </section>
+    </div>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

@@ -10,6 +10,10 @@ import { getDatabase, withDatabase } from "../shared/store.js";
 const instanceId = `${os.hostname()}-${process.pid}`;
 let isLeader = false;
 
+function schedulerRegistryCutoff() {
+  return Date.now() - config.leaderTtlMs * 2;
+}
+
 function average(values) {
   if (!values.length) {
     return 0;
@@ -21,10 +25,18 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function getExecutionMode(job) {
+  return job.executionMode || "cron";
+}
+
 function acquireOrRenewLeadership() {
   const now = Date.now();
 
   const state = withDatabase((database) => {
+    database.scheduler.instances = (database.scheduler.instances || []).filter(
+      (instance) => new Date(instance.lastSeenAt || 0).getTime() > schedulerRegistryCutoff()
+    );
+
     const leaderExpiresAt = database.scheduler.leaderExpiresAt
       ? new Date(database.scheduler.leaderExpiresAt).getTime()
       : 0;
@@ -51,6 +63,18 @@ function acquireOrRenewLeadership() {
     };
   });
 
+  withDatabase((database) => {
+    database.scheduler.instances = (database.scheduler.instances || []).filter(
+      (instance) => instance.instanceId !== instanceId
+    );
+    database.scheduler.instances.push({
+      instanceId,
+      schedulerPort: config.schedulerPort,
+      leader: state.leader === instanceId,
+      lastSeenAt: new Date(now).toISOString()
+    });
+  });
+
   isLeader = state.leader === instanceId;
   return isLeader;
 }
@@ -74,8 +98,10 @@ async function dispatchJob(jobId) {
       id: job.id,
       tenantId: job.tenantId,
       name: job.name,
+      executionMode: getExecutionMode(job),
       payload: job.payload,
       schedule: job.schedule,
+      runAt: job.runAt || null,
       attempt: job.retryCount + 1,
       maxRetries: job.maxRetries,
       retryBackoffSeconds: job.retryBackoffSeconds
@@ -122,8 +148,13 @@ async function dispatchJob(jobId) {
         idempotencyKey
       });
       job.retryCount = 0;
-      job.state = "ACTIVE";
-      job.nextRunAt = computeNextRunAt(job.schedule, new Date(finishedAt)).toISOString();
+      if (getExecutionMode(job) === "queue") {
+        job.state = "COMPLETED";
+        job.nextRunAt = null;
+      } else {
+        job.state = "ACTIVE";
+        job.nextRunAt = computeNextRunAt(job.schedule, new Date(finishedAt)).toISOString();
+      }
       job.lastError = null;
       job.lockedUntil = null;
       job.updatedAt = nowIso();
@@ -166,7 +197,9 @@ async function dispatchJob(jobId) {
       } else {
         job.retryCount = 0;
         job.state = "FAILED";
-        job.nextRunAt = computeNextRunAt(job.schedule, new Date(finishedAt)).toISOString();
+        job.nextRunAt = getExecutionMode(job) === "queue"
+          ? null
+          : computeNextRunAt(job.schedule, new Date(finishedAt)).toISOString();
       }
 
       job.lastError = error.message;
@@ -185,6 +218,9 @@ async function runTick() {
       return false;
     }
     if (!["ACTIVE", "FAILED", "RETRYING"].includes(job.state)) {
+      return false;
+    }
+    if (!job.nextRunAt) {
       return false;
     }
     return new Date(job.nextRunAt).getTime() <= Date.now();

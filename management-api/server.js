@@ -1,10 +1,19 @@
 import "../shared/load-env.js";
+import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
 import { config, devTokens } from "../shared/config.js";
 import { computeNextRunAt, validateSchedule } from "../shared/cron.js";
 import { sendJson, readJsonBody } from "../shared/http.js";
 import { createId } from "../shared/ids.js";
 import { getDatabase, withDatabase } from "../shared/store.js";
+
+const publicDir = path.join(process.cwd(), "management-api", "public");
+const staticFiles = {
+  "/": { file: "index.html", type: "text/html; charset=utf-8" },
+  "/app.js": { file: "app.js", type: "application/javascript; charset=utf-8" },
+  "/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" }
+};
 
 function getClaims(request) {
   const authHeader = request.headers.authorization || "";
@@ -98,7 +107,9 @@ function normalizeJobSummary(job) {
     id: job.id,
     tenantId: job.tenantId,
     name: job.name,
+    executionMode: job.executionMode || "cron",
     cron: job.schedule,
+    runAt: job.runAt || null,
     payload: job.payload,
     maxRetries: job.maxRetries,
     retryBackoffSeconds: job.retryBackoffSeconds,
@@ -106,6 +117,97 @@ function normalizeJobSummary(job) {
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
     nextRunAt: job.nextRunAt
+  };
+}
+
+function resolveExecutionPlan(body) {
+  const executionMode = body.executionMode === "queue" ? "queue" : "cron";
+
+  if (executionMode === "cron") {
+    if (!body.cron) {
+      throw new Error("cron is required for cron jobs");
+    }
+
+    validateSchedule(body.cron);
+    return {
+      executionMode,
+      schedule: body.cron,
+      runAt: null,
+      nextRunAt: computeNextRunAt(body.cron, new Date()).toISOString()
+    };
+  }
+
+  const requestedRunAt = body.runAt ? new Date(body.runAt) : new Date();
+  if (Number.isNaN(requestedRunAt.getTime())) {
+    throw new Error("runAt must be a valid ISO timestamp");
+  }
+
+  return {
+    executionMode,
+    schedule: null,
+    runAt: requestedRunAt.toISOString(),
+    nextRunAt: requestedRunAt.toISOString()
+  };
+}
+
+function formatTenantSummary(tenant, database, claims) {
+  const jobs = database.jobs.filter((job) => job.tenantId === tenant.slug && !job.deletedAt);
+  const activeJobs = jobs.filter((job) => job.state === "ACTIVE").length;
+  const failedJobs = jobs.filter((job) => job.state === "FAILED").length;
+
+  return {
+    id: tenant.id,
+    name: tenant.name,
+    slug: tenant.slug,
+    rateLimitPerMinute: tenant.rateLimitPerMinute,
+    roles: claims.roles,
+    jobCount: jobs.length,
+    activeJobs,
+    failedJobs
+  };
+}
+
+function buildDashboardSummary(claims, tenantId) {
+  const database = getDatabase();
+  const visibleTenants = claims.tenantId
+    ? database.tenants.filter((tenant) => tenant.slug === claims.tenantId)
+    : database.tenants;
+  const scopedTenantIds = new Set(visibleTenants.map((tenant) => tenant.slug));
+  const jobs = database.jobs.filter((job) => scopedTenantIds.has(job.tenantId) && !job.deletedAt);
+  const selectedTenant = tenantId || claims.tenantId || visibleTenants[0]?.slug || null;
+  const selectedJobs = selectedTenant
+    ? jobs.filter((job) => job.tenantId === selectedTenant)
+    : jobs;
+
+  return {
+    tenants: visibleTenants.map((tenant) => formatTenantSummary(tenant, database, claims)),
+    selectedTenant,
+    overview: {
+      tenantCount: visibleTenants.length,
+      jobCount: jobs.length,
+      activeJobs: jobs.filter((job) => job.state === "ACTIVE").length,
+      retryingJobs: jobs.filter((job) => job.state === "RETRYING").length,
+      failedJobs: jobs.filter((job) => job.state === "FAILED").length,
+      runningJobs: jobs.filter((job) => job.state === "RUNNING").length
+    },
+    scheduler: {
+      leader: database.scheduler.leader,
+      leaderExpiresAt: database.scheduler.leaderExpiresAt,
+      instances: (database.scheduler.instances || [])
+        .slice()
+        .sort((left, right) => left.instanceId.localeCompare(right.instanceId)),
+      instanceCount: (database.scheduler.instances || []).length,
+      metrics: database.scheduler.metrics
+    },
+    jobs: selectedJobs
+      .slice()
+      .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())
+      .slice(0, 25)
+      .map((job) => ({
+        ...normalizeJobSummary(job),
+        historyCount: job.history.length,
+        lastError: job.lastError
+      }))
   };
 }
 
@@ -123,7 +225,9 @@ function handleListJobs(response, tenantId, url) {
   const items = jobs.slice(start, start + limit).map((job) => ({
     id: job.id,
     name: job.name,
+    executionMode: job.executionMode || "cron",
     cron: job.schedule,
+    runAt: job.runAt || null,
     status: job.state,
     nextRunAt: job.nextRunAt
   }));
@@ -136,8 +240,34 @@ function handleListJobs(response, tenantId, url) {
   });
 }
 
+function serveStaticAsset(response, pathname) {
+  const asset = staticFiles[pathname];
+  if (!asset) {
+    return false;
+  }
+
+  const filePath = path.join(publicDir, asset.file);
+  if (!fs.existsSync(filePath)) {
+    response.writeHead(500, {
+      "Content-Type": "text/plain; charset=utf-8"
+    });
+    response.end("Missing UI asset");
+    return true;
+  }
+
+  response.writeHead(200, {
+    "Content-Type": asset.type
+  });
+  response.end(fs.readFileSync(filePath));
+  return true;
+}
+
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, `http://${request.headers.host}`);
+
+  if (serveStaticAsset(response, url.pathname)) {
+    return;
+  }
 
   if (request.method === "GET" && url.pathname === "/health") {
     sendJson(response, 200, { status: "ok", service: "management-api" });
@@ -146,6 +276,29 @@ const server = http.createServer(async (request, response) => {
 
   const claims = requireClaims(request, response);
   if (!claims) {
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/dashboard") {
+    const tenantId = requireTenantScope(request, response, claims, { allowMissing: true });
+    if (tenantId === null && claims.tenantId) {
+      return;
+    }
+
+    sendJson(response, 200, buildDashboardSummary(claims, tenantId));
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/tenants") {
+    const database = getDatabase();
+    const tenants = claims.tenantId
+      ? database.tenants.filter((tenant) => tenant.slug === claims.tenantId)
+      : database.tenants;
+
+    sendJson(response, 200, {
+      items: tenants.map((tenant) => formatTenantSummary(tenant, database, claims)),
+      total: tenants.length
+    });
     return;
   }
 
@@ -292,10 +445,13 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    let executionPlan;
     try {
-      validateSchedule(body.cron);
+      executionPlan = resolveExecutionPlan(body);
     } catch (error) {
-      sendError(response, 400, "validation_error", error.message, { field: "cron" });
+      sendError(response, 400, "validation_error", error.message, {
+        field: body.executionMode === "queue" ? "runAt" : "cron"
+      });
       return;
     }
 
@@ -317,12 +473,14 @@ const server = http.createServer(async (request, response) => {
         id: createId("job"),
         tenantId,
         name: body.name,
-        schedule: body.cron,
+        executionMode: executionPlan.executionMode,
+        schedule: executionPlan.schedule,
+        runAt: executionPlan.runAt,
         payload: body.payload,
         maxRetries: Math.min(Number(body.maxRetries || 3), 10),
         retryBackoffSeconds: Math.max(Number(body.retryBackoffSeconds || 60), 1),
         state: "ACTIVE",
-        nextRunAt: computeNextRunAt(body.cron, new Date()).toISOString(),
+        nextRunAt: executionPlan.nextRunAt,
         retryCount: 0,
         history: [],
         idempotency: [],
@@ -409,11 +567,24 @@ const server = http.createServer(async (request, response) => {
 
     const jobId = url.pathname.split("/")[2];
     const body = await readJsonBody(request);
-    if (body.cron) {
+    if (body.executionMode !== undefined && body.executionMode !== "cron" && body.executionMode !== "queue") {
+      sendError(response, 400, "validation_error", "executionMode must be cron or queue", {
+        field: "executionMode"
+      });
+      return;
+    }
+
+    if (body.cron || body.executionMode === "cron" || body.executionMode === "queue" || body.runAt) {
       try {
-        validateSchedule(body.cron);
+        resolveExecutionPlan({
+          executionMode: body.executionMode || "cron",
+          cron: body.cron,
+          runAt: body.runAt
+        });
       } catch (error) {
-        sendError(response, 400, "validation_error", error.message, { field: "cron" });
+        sendError(response, 400, "validation_error", error.message, {
+          field: body.executionMode === "queue" || body.runAt ? "runAt" : "cron"
+        });
         return;
       }
     }
@@ -434,8 +605,33 @@ const server = http.createServer(async (request, response) => {
       }
 
       if (body.cron) {
-        job.schedule = body.cron;
-        job.nextRunAt = computeNextRunAt(body.cron, new Date()).toISOString();
+        const executionPlan = resolveExecutionPlan({
+          executionMode: body.executionMode || job.executionMode || "cron",
+          cron: body.cron,
+          runAt: body.runAt || job.runAt
+        });
+        job.executionMode = executionPlan.executionMode;
+        job.schedule = executionPlan.schedule;
+        job.runAt = executionPlan.runAt;
+        job.nextRunAt = executionPlan.nextRunAt;
+      } else if (body.executionMode === "queue" || body.runAt) {
+        const executionPlan = resolveExecutionPlan({
+          executionMode: "queue",
+          runAt: body.runAt || job.runAt
+        });
+        job.executionMode = executionPlan.executionMode;
+        job.schedule = executionPlan.schedule;
+        job.runAt = executionPlan.runAt;
+        job.nextRunAt = executionPlan.nextRunAt;
+      } else if (body.executionMode === "cron") {
+        const executionPlan = resolveExecutionPlan({
+          executionMode: "cron",
+          cron: job.schedule
+        });
+        job.executionMode = executionPlan.executionMode;
+        job.schedule = executionPlan.schedule;
+        job.runAt = executionPlan.runAt;
+        job.nextRunAt = executionPlan.nextRunAt;
       }
       if (body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)) {
         job.payload = body.payload;
@@ -450,7 +646,9 @@ const server = http.createServer(async (request, response) => {
 
       const payload = {
         id: job.id,
+        executionMode: job.executionMode || "cron",
         cron: job.schedule,
+        runAt: job.runAt || null,
         maxRetries: job.maxRetries,
         updatedAt: job.updatedAt
       };

@@ -5,3 +5,5 @@ data/*.json
 .full-review/
 .claude/
 docs/
+ui/node_modules/
+ui/dist/

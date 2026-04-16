@@ -7,7 +7,7 @@ import HistoryView from './features/history/HistoryView.jsx'
 import { fetchDashboard } from './api/client.js'
 
 function nowToken() {
-  return `ui-${Date.now()}`
+  return `ui-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
 }
 
 export default function App() {

@@ -263,6 +263,16 @@ function serveStaticAsset(response, pathname) {
 }
 
 const server = http.createServer(async (request, response) => {
+  try {
+    await handleRequest(request, response);
+  } catch (err) {
+    if (!response.headersSent) {
+      sendError(response, err.statusCode ?? 500, "internal_error", err.message);
+    }
+  }
+});
+
+async function handleRequest(request, response) {
   const url = new URL(request.url, `http://${request.headers.host}`);
 
   if (serveStaticAsset(response, url.pathname)) {
@@ -466,6 +476,9 @@ const server = http.createServer(async (request, response) => {
         if (idempotent.responsePayload) {
           return { kind: "reuse", payload: idempotent.responsePayload };
         }
+        // A job with this name already exists but the idempotency key is new.
+        // Reject to prevent creating a duplicate.
+        return { kind: "conflict" };
       }
 
       const createdAt = new Date().toISOString();
@@ -705,7 +718,7 @@ const server = http.createServer(async (request, response) => {
   }
 
   sendError(response, 404, "not_found", "Route not found");
-});
+}
 
 server.listen(config.apiPort, () => {
   console.log(`management-api listening on http://127.0.0.1:${config.apiPort}`);

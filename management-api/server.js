@@ -232,6 +232,7 @@ function handleListJobs(response, tenantId, url) {
 }
 
 function setCorsHeaders(response) {
+  // Dev tool only — wildcard origin is intentional for local development
   response.setHeader("Access-Control-Allow-Origin", "*");
   response.setHeader(
     "Access-Control-Allow-Headers",

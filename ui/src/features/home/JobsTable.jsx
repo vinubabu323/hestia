@@ -27,7 +27,7 @@ export default function JobsTable({ jobs, onViewHistory }) {
               </td>
               <td>{job.executionMode}</td>
               <td>
-                <span className={`pill ${job.status.toLowerCase()}`}>{job.status}</span>
+                <span className={`pill ${job.status?.toLowerCase() ?? ''}`}>{job.status ?? ''}</span>
               </td>
               <td>{job.executionMode === 'queue' ? (job.runAt || 'immediate') : job.cron}</td>
               <td>{job.nextRunAt || 'n/a'}</td>

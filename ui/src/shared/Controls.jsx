@@ -23,14 +23,12 @@ export default function Controls({
       <label>
         <span>Tenant</span>
         <select value={selectedTenant} onChange={(e) => onTenantChange(e.target.value)}>
-          {tenants.length === 0
-            ? <option value="">No tenants</option>
-            : tenants.map((t) => (
-                <option key={t.slug} value={t.slug}>
-                  {t.slug} ({t.jobCount} jobs)
-                </option>
-              ))
-          }
+          <option value="">-- select tenant --</option>
+          {tenants.map((t) => (
+            <option key={t.slug} value={t.slug}>
+              {t.slug} ({t.jobCount} jobs)
+            </option>
+          ))}
         </select>
       </label>
       <label>

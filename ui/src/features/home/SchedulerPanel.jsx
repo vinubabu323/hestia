@@ -1,7 +1,7 @@
 export default function SchedulerPanel({ scheduler }) {
   if (!scheduler) return null
 
-  const { metrics, instances = [], instanceCount, leader, leaderExpiresAt } = scheduler
+  const { metrics = {}, instances = [], instanceCount, leader, leaderExpiresAt } = scheduler
 
   return (
     <div className="stack">

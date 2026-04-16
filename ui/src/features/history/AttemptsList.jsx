@@ -8,8 +8,8 @@ export default function AttemptsList({ items, emptyMessage }) {
 
   return (
     <div className="history-list">
-      {[...items].reverse().map((item, i) => (
-        <div key={i} className="history-item">
+      {[...items].reverse().map((item) => (
+        <div key={item.attempt} className="history-item">
           <strong>Attempt {item.attempt} - {item.status}</strong>
           <div>Started: {item.startedAt}</div>
           <div>Finished: {item.finishedAt}</div>

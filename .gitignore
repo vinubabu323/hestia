@@ -2,3 +2,6 @@ node_modules/
 .env
 data/*.json
 !data/.gitkeep
+.full-review/
+.claude/
+docs/

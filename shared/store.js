@@ -81,7 +81,9 @@ function releaseLock() {
   try {
     fs.unlinkSync(lockFile);
   } catch (error) {
-    if (error.code !== "ENOENT") {
+    // ENOENT: already deleted (another process beat us to it) — fine
+    // EBUSY: Windows holds the file open momentarily — fine, lock will expire
+    if (error.code !== "ENOENT" && error.code !== "EBUSY") {
       throw error;
     }
   }

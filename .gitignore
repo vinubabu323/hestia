@@ -7,3 +7,4 @@ data/*.json
 docs/
 ui/node_modules/
 ui/dist/
+ui/.env

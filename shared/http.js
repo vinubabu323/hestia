@@ -16,7 +16,13 @@ export async function readJsonBody(request) {
     return {};
   }
 
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    const err = new SyntaxError("Request body is not valid JSON");
+    err.statusCode = 400;
+    throw err;
+  }
 }
 
 export async function postJson(url, payload, timeoutMs) {

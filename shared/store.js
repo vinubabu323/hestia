@@ -5,6 +5,7 @@ import { config } from "./config.js";
 const lockFile = `${config.dataFile}.lock`;
 const lockRetryMs = 25;
 const staleLockMs = 30000;
+const tmpFile = () => config.dataFile + ".tmp";
 
 function defaultDatabase() {
   return {
@@ -93,7 +94,9 @@ function readDatabase() {
 
 function writeDatabase(database) {
   ensureDatabaseFile();
-  fs.writeFileSync(config.dataFile, JSON.stringify(database, null, 2));
+  const tmp = tmpFile();
+  fs.writeFileSync(tmp, JSON.stringify(database, null, 2));
+  fs.renameSync(tmp, config.dataFile);
 }
 
 export function withDatabase(mutator) {

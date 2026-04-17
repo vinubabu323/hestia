@@ -63,31 +63,52 @@ export default function CreateJobForm({
 
   return (
     <form className="stack" onSubmit={handleSubmit}>
-      <input name="name" type="text" placeholder="heartbeat" required />
-      <select
-        name="executionMode"
-        value={executionMode}
-        onChange={(e) => setExecutionMode(e.target.value)}
-      >
-        <option value="cron">Recurring Cron Job</option>
-        <option value="queue">One-Time Queue Job</option>
-      </select>
-      <input
-        name="cron"
-        type="text"
-        placeholder={executionMode === 'queue' ? 'Queue jobs do not use cron' : '@every 10s'}
-        defaultValue="@every 10s"
-        disabled={executionMode === 'queue'}
-        required={executionMode === 'cron'}
-      />
-      <input
-        name="runAt"
-        type="datetime-local"
-        disabled={executionMode === 'cron'}
-      />
-      <input name="maxRetries" type="number" min="1" max="10" defaultValue="3" required />
-      <input name="retryBackoffSeconds" type="number" min="1" defaultValue="1" required />
-      <textarea name="payload" rows="7" required defaultValue='{"message":"hello from dashboard"}' />
+      <label>
+        Job Name
+        <input name="name" type="text" placeholder="heartbeat" required />
+      </label>
+      <label>
+        Execution Mode
+        <select
+          name="executionMode"
+          value={executionMode}
+          onChange={(e) => setExecutionMode(e.target.value)}
+        >
+          <option value="cron">Recurring Cron Job</option>
+          <option value="queue">One-Time Queue Job</option>
+        </select>
+      </label>
+      <label>
+        Cron Expression
+        <input
+          name="cron"
+          type="text"
+          placeholder={executionMode === 'queue' ? 'Queue jobs do not use cron' : '@every 10s'}
+          defaultValue="@every 10s"
+          disabled={executionMode === 'queue'}
+          required={executionMode === 'cron'}
+        />
+      </label>
+      <label>
+        Run At
+        <input
+          name="runAt"
+          type="datetime-local"
+          disabled={executionMode === 'cron'}
+        />
+      </label>
+      <label>
+        Max Retries
+        <input name="maxRetries" type="number" min="1" max="10" defaultValue="3" required />
+      </label>
+      <label>
+        Retry Backoff (seconds)
+        <input name="retryBackoffSeconds" type="number" min="1" defaultValue="1" required />
+      </label>
+      <label>
+        Payload (JSON)
+        <textarea name="payload" rows="7" required defaultValue='{"message":"hello from dashboard"}' />
+      </label>
       <button type="submit">Create Job</button>
     </form>
   )

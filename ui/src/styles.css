@@ -63,6 +63,15 @@ textarea {
   gap: 8px;
 }
 
+.stack label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #53627d;
+}
+
 .controls span {
   font-size: 14px;
   color: #53627d;

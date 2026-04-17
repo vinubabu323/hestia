@@ -6,7 +6,7 @@ export const config = {
   apiPort: Number(process.env.API_PORT || 3000),
   schedulerPort: Number(process.env.GRPC_PORT || 4000),
   workerPort: Number(process.env.WORKER_PORT || 4100),
-  dataFile: process.env.DATA_FILE || path.join(rootDir, "data", "hestia.json"),
+  databaseUrl: process.env.DATABASE_URL || "postgresql://hestia:hestia@localhost:5432/hestia_dev",
   workerUrl: process.env.WORKER_URL || `http://127.0.0.1:${process.env.WORKER_PORT || 4100}`,
   schedulerTickMs: Number(process.env.SCHEDULER_TICK_MS || 2000),
   leaderTtlMs: Number(process.env.LEADER_TTL_MS || 10000),

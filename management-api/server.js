@@ -454,14 +454,13 @@ async function handleRequest(request, response) {
       if (existing) {
         const idempotent = getIdempotentResponse(existing, idempotencyKey, "create", requestHash);
         if (idempotent.conflict) {
-          return { kind: "conflict" };
+          return { kind: "idempotency_conflict" };
         }
         if (idempotent.responsePayload) {
           return { kind: "reuse", payload: idempotent.responsePayload };
         }
         // A job with this name already exists but the idempotency key is new.
-        // Reject to prevent creating a duplicate.
-        return { kind: "conflict" };
+        return { kind: "duplicate_name" };
       }
 
       const createdAt = new Date().toISOString();
@@ -493,8 +492,13 @@ async function handleRequest(request, response) {
       return { kind: "created", payload };
     });
 
-    if (result.kind === "conflict") {
+    if (result.kind === "idempotency_conflict") {
       sendError(response, 409, "idempotency_conflict", "Idempotency key was already used with a different payload");
+      return;
+    }
+
+    if (result.kind === "duplicate_name") {
+      sendError(response, 409, "conflict", "A job with this name already exists");
       return;
     }
 

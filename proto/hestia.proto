@@ -1,0 +1,24 @@
+syntax = "proto3";
+package hestia;
+option go_package = "github.com/vinubabu/hestia/proto/gen/go/hestia";
+
+service Worker {
+  rpc Execute(ExecuteRequest) returns (ExecuteResponse);
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+
+message ExecuteRequest {
+  string job_id          = 1;
+  string tenant_id       = 2;
+  string idempotency_key = 3;
+  string payload_json    = 4;
+  int32  attempt         = 5;
+}
+
+message ExecuteResponse {
+  bool   success        = 1;
+  string error_message  = 2;
+}
+
+message PingRequest {}
+message PingResponse { bool ok = 1; }

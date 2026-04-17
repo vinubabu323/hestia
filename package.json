@@ -9,5 +9,8 @@
     "start:scheduler": "node scheduler/server.js",
     "start:worker": "node workers/mock-worker/server.js",
     "start:ui": "cd ui && npm run dev"
+  },
+  "dependencies": {
+    "postgres": "^3.4.9"
   }
 }

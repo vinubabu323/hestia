@@ -1,19 +1,10 @@
 import "../shared/load-env.js";
-import fs from "node:fs";
 import http from "node:http";
-import path from "node:path";
 import { config, devTokens } from "../shared/config.js";
 import { computeNextRunAt, validateSchedule } from "../shared/cron.js";
 import { sendJson, readJsonBody } from "../shared/http.js";
 import { createId } from "../shared/ids.js";
 import { getDatabase, withDatabase } from "../shared/store.js";
-
-const publicDir = path.join(process.cwd(), "management-api", "public");
-const staticFiles = {
-  "/": { file: "index.html", type: "text/html; charset=utf-8" },
-  "/app.js": { file: "app.js", type: "application/javascript; charset=utf-8" },
-  "/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" }
-};
 
 function getClaims(request) {
   const authHeader = request.headers.authorization || "";
@@ -240,26 +231,14 @@ function handleListJobs(response, tenantId, url) {
   });
 }
 
-function serveStaticAsset(response, pathname) {
-  const asset = staticFiles[pathname];
-  if (!asset) {
-    return false;
-  }
-
-  const filePath = path.join(publicDir, asset.file);
-  if (!fs.existsSync(filePath)) {
-    response.writeHead(500, {
-      "Content-Type": "text/plain; charset=utf-8"
-    });
-    response.end("Missing UI asset");
-    return true;
-  }
-
-  response.writeHead(200, {
-    "Content-Type": asset.type
-  });
-  response.end(fs.readFileSync(filePath));
-  return true;
+function setCorsHeaders(response) {
+  // Dev tool only — wildcard origin is intentional for local development
+  response.setHeader("Access-Control-Allow-Origin", "*");
+  response.setHeader(
+    "Access-Control-Allow-Headers",
+    "Authorization, X-Tenant-ID, Idempotency-Key, Content-Type"
+  );
+  response.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
 }
 
 const server = http.createServer(async (request, response) => {
@@ -273,11 +252,15 @@ const server = http.createServer(async (request, response) => {
 });
 
 async function handleRequest(request, response) {
-  const url = new URL(request.url, `http://${request.headers.host}`);
+  setCorsHeaders(response);
 
-  if (serveStaticAsset(response, url.pathname)) {
+  if (request.method === "OPTIONS") {
+    response.writeHead(204);
+    response.end();
     return;
   }
+
+  const url = new URL(request.url, `http://${request.headers.host}`);
 
   if (request.method === "GET" && url.pathname === "/health") {
     sendJson(response, 200, { status: "ok", service: "management-api" });
@@ -471,14 +454,13 @@ async function handleRequest(request, response) {
       if (existing) {
         const idempotent = getIdempotentResponse(existing, idempotencyKey, "create", requestHash);
         if (idempotent.conflict) {
-          return { kind: "conflict" };
+          return { kind: "idempotency_conflict" };
         }
         if (idempotent.responsePayload) {
           return { kind: "reuse", payload: idempotent.responsePayload };
         }
         // A job with this name already exists but the idempotency key is new.
-        // Reject to prevent creating a duplicate.
-        return { kind: "conflict" };
+        return { kind: "duplicate_name" };
       }
 
       const createdAt = new Date().toISOString();
@@ -510,8 +492,13 @@ async function handleRequest(request, response) {
       return { kind: "created", payload };
     });
 
-    if (result.kind === "conflict") {
+    if (result.kind === "idempotency_conflict") {
       sendError(response, 409, "idempotency_conflict", "Idempotency key was already used with a different payload");
+      return;
+    }
+
+    if (result.kind === "duplicate_name") {
+      sendError(response, 409, "conflict", "A job with this name already exists");
       return;
     }
 

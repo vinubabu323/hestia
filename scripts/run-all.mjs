@@ -2,15 +2,18 @@ import "../shared/load-env.js";
 import { spawn } from "node:child_process";
 
 const services = [
-  ["api", ["management-api/server.js"]],
-  ["scheduler", ["scheduler/server.js"]],
-  ["worker", ["workers/mock-worker/server.js"]]
+  { name: "api", cmd: process.execPath, args: ["management-api/server.js"] },
+  { name: "scheduler", cmd: process.execPath, args: ["scheduler/server.js"] },
+  { name: "worker", cmd: process.execPath, args: ["workers/mock-worker/server.js"] },
+  { name: "ui", cmd: "npm", args: ["run", "dev"], cwd: "ui", shell: true }
 ];
 
-const children = services.map(([name, args]) => {
-  const child = spawn(process.execPath, args, {
+const children = services.map(({ name, cmd, args, cwd, shell }) => {
+  const child = spawn(cmd, args, {
     stdio: ["inherit", "pipe", "pipe"],
-    env: process.env
+    env: process.env,
+    ...(cwd ? { cwd } : {}),
+    ...(shell ? { shell: true } : {})
   });
 
   child.stdout.on("data", (chunk) => {

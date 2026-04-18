@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 
 const services = [
   { name: "api", cmd: process.execPath, args: ["management-api/server.js"] },
-  { name: "scheduler", cmd: process.execPath, args: ["scheduler/server.js"] },
+  { name: "scheduler", cmd: "go", args: ["run", "./scheduler/cmd/scheduler"], shell: true },
   { name: "worker", cmd: process.execPath, args: ["workers/mock-worker/server.js"] },
   { name: "ui", cmd: "npm", args: ["run", "dev"], cwd: "ui", shell: true }
 ];

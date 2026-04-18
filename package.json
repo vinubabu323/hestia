@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node scripts/run-all.mjs",
     "start:api": "node management-api/server.js",
-    "start:scheduler": "node scheduler/server.js",
+    "start:scheduler": "go run ./scheduler/cmd/scheduler",
     "start:worker": "node workers/mock-worker/server.js",
     "start:ui": "cd ui && npm run dev"
   },

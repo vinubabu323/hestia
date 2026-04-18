@@ -39,9 +39,9 @@ func main() {
 	rdb := redis.NewClient(opt)
 	defer rdb.Close()
 
-	workerClient, err := dispatch.NewWorkerClient(cfg.GRPCWorkerAddr)
+	workerClient, err := dispatch.NewWorkerClient(cfg.WorkerURL)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "grpc connect: %v\n", err)
+		fmt.Fprintf(os.Stderr, "worker client init: %v\n", err)
 		os.Exit(1)
 	}
 	defer workerClient.Close()

@@ -12,6 +12,7 @@ type Job struct {
 	TenantID            string
 	ExecutionMode       string
 	Schedule            *string
+	NextRunAt           time.Time
 	PayloadJSON         string
 	MaxRetries          int
 	RetryBackoffSeconds int
@@ -42,7 +43,7 @@ func New(pool *pgxpool.Pool) *Store {
 
 func (s *Store) DueJobs(ctx context.Context) ([]Job, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, tenant_id, execution_mode, schedule, payload::text,
+		SELECT id, tenant_id, execution_mode, schedule, next_run_at, payload::text,
 		       max_retries, retry_backoff_seconds, state, retry_count
 		FROM jobs
 		WHERE next_run_at <= NOW()
@@ -58,7 +59,7 @@ func (s *Store) DueJobs(ctx context.Context) ([]Job, error) {
 	var jobs []Job
 	for rows.Next() {
 		var j Job
-		if err := rows.Scan(&j.ID, &j.TenantID, &j.ExecutionMode, &j.Schedule,
+		if err := rows.Scan(&j.ID, &j.TenantID, &j.ExecutionMode, &j.Schedule, &j.NextRunAt,
 			&j.PayloadJSON, &j.MaxRetries, &j.RetryBackoffSeconds, &j.State, &j.RetryCount); err != nil {
 			return nil, err
 		}
@@ -67,12 +68,21 @@ func (s *Store) DueJobs(ctx context.Context) ([]Job, error) {
 	return jobs, rows.Err()
 }
 
-func (s *Store) MarkSuccess(ctx context.Context, jobID string, nextRunAt time.Time) error {
+func (s *Store) MarkSuccess(ctx context.Context, job Job, nextRunAt *time.Time) error {
+	if job.ExecutionMode == "queue" {
+		_, err := s.pool.Exec(ctx, `
+			UPDATE jobs SET state = 'COMPLETED', retry_count = 0, next_run_at = NULL,
+			               last_error = NULL, updated_at = NOW()
+			WHERE id = $1
+		`, job.ID)
+		return err
+	}
+
 	_, err := s.pool.Exec(ctx, `
 		UPDATE jobs SET state = 'ACTIVE', retry_count = 0, next_run_at = $1,
 		               last_error = NULL, updated_at = NOW()
 		WHERE id = $2
-	`, nextRunAt, jobID)
+	`, nextRunAt, job.ID)
 	return err
 }
 

@@ -3,12 +3,12 @@ package dispatch
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/robfig/cron/v3"
 
-	pb "github.com/vinubabu/hestia/proto/gen/go/hestia"
 	"github.com/vinubabu/hestia/scheduler/internal/store"
 )
 
@@ -37,7 +37,7 @@ func (d *Dispatcher) Tick(ctx context.Context) {
 
 func (d *Dispatcher) dispatch(ctx context.Context, job store.Job) {
 	lockKey := "lock:job:" + job.ID
-	idemKey := fmt.Sprintf("idem:%s:%d", job.ID, job.RetryCount)
+	idemKey := fmt.Sprintf("idem:%s:%s", job.ID, job.NextRunAt.UTC().Format(time.RFC3339Nano))
 
 	// 1. Acquire per-job Redis lock
 	acquired, err := d.rdb.SetArgs(ctx, lockKey, "1", redis.SetArgs{
@@ -65,11 +65,11 @@ func (d *Dispatcher) dispatch(ctx context.Context, job store.Job) {
 	d.rdb.Set(ctx, idemKey, "1", 24*time.Hour)
 
 	startedAt := time.Now()
-	resp, execErr := d.worker.Execute(ctx, &pb.ExecuteRequest{
-		JobId:          job.ID,
-		TenantId:       job.TenantID,
+	resp, execErr := d.worker.Execute(ctx, &ExecuteRequest{
+		JobID:          job.ID,
+		TenantID:       job.TenantID,
 		IdempotencyKey: idemKey,
-		PayloadJson:    job.PayloadJSON,
+		PayloadJSON:    job.PayloadJSON,
 		Attempt:        int32(job.RetryCount + 1),
 	}, d.dispatchTimeout)
 	finishedAt := time.Now()
@@ -106,7 +106,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, job store.Job) {
 	// 7. Advance job state
 	if success {
 		nextRunAt := computeNextRunAt(job)
-		d.store.MarkSuccess(ctx, job.ID, nextRunAt)
+		d.store.MarkSuccess(ctx, job, nextRunAt)
 	} else {
 		d.store.MarkFailed(ctx, job.ID, failReason, job.MaxRetries, job.RetryCount, job.RetryBackoffSeconds)
 	}
@@ -114,12 +114,28 @@ func (d *Dispatcher) dispatch(ctx context.Context, job store.Job) {
 
 var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 
-func computeNextRunAt(job store.Job) time.Time {
+func computeNextRunAt(job store.Job) *time.Time {
 	if job.ExecutionMode == "cron" && job.Schedule != nil {
+		if nextRunAt, ok := parseEverySchedule(*job.Schedule, time.Now()); ok {
+			return &nextRunAt
+		}
 		if sched, err := cronParser.Parse(*job.Schedule); err == nil {
-			return sched.Next(time.Now())
+			nextRunAt := sched.Next(time.Now())
+			return &nextRunAt
 		}
 	}
-	// One-shot queue jobs: set far future so they don't re-fire
-	return time.Now().Add(365 * 24 * time.Hour)
+	return nil
+}
+
+func parseEverySchedule(schedule string, from time.Time) (time.Time, bool) {
+	if !strings.HasPrefix(schedule, "@every ") {
+		return time.Time{}, false
+	}
+
+	duration, err := time.ParseDuration(strings.TrimSpace(strings.TrimPrefix(schedule, "@every ")))
+	if err != nil {
+		return time.Time{}, false
+	}
+
+	return from.Add(duration), true
 }

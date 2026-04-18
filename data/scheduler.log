@@ -1,1 +1,3 @@
-scheduler listening on http://127.0.0.1:4000
+scheduler started instance=LAPTOP-V1EQ5MST-20604
+leader: LAPTOP-V1EQ5MST-20604 acquired leadership
+scheduler shutting down

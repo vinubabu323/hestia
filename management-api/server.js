@@ -1,11 +1,15 @@
 import "../shared/load-env.js";
 import http from "node:http";
+import net from "node:net";
 import { config, devTokens } from "../shared/config.js";
 import { computeNextRunAt, validateSchedule } from "../shared/cron.js";
 import { sendJson, readJsonBody } from "../shared/http.js";
 import { createId } from "../shared/ids.js";
 import { getDb } from "../shared/db.js";
 import { runMigrations } from "./migrate.js";
+
+const schedulerLeaderKey = "scheduler:leader";
+const schedulerLeaderElectionsKey = "scheduler:metrics:leader_elections_total";
 
 function getClaims(request) {
   const authHeader = request.headers.authorization || "";
@@ -122,18 +126,27 @@ async function buildDashboardSummary(claims, tenantId) {
 
   const selectedTenant = tenantId || claims.tenantId || tenantRows[0]?.slug || null;
   const tenantSlugs = tenantRows.map((t) => t.slug);
+  const scopedTenantSlugs = selectedTenant ? tenantSlugs.filter((slug) => slug === selectedTenant) : tenantSlugs;
 
-  const jobs = tenantSlugs.length > 0
+  const jobs = scopedTenantSlugs.length > 0
     ? await sql`
-        SELECT * FROM jobs
-        WHERE tenant_id = ANY(${tenantSlugs})
+        SELECT
+          jobs.*,
+          COALESCE(job_history.history_count, 0) AS history_count
+        FROM jobs
+        LEFT JOIN (
+          SELECT job_id, COUNT(*) AS history_count
+          FROM event_log
+          GROUP BY job_id
+        ) AS job_history ON job_history.job_id = jobs.id
+        WHERE tenant_id = ANY(${scopedTenantSlugs})
           AND deleted_at IS NULL
         ORDER BY updated_at DESC
         LIMIT 25
       `
     : [];
 
-  const counts = tenantSlugs.length > 0
+  const counts = scopedTenantSlugs.length > 0
     ? await sql`
         SELECT
           COUNT(*)                                              AS job_count,
@@ -142,11 +155,12 @@ async function buildDashboardSummary(claims, tenantId) {
           COUNT(*) FILTER (WHERE state = 'FAILED')              AS failed_jobs,
           COUNT(*) FILTER (WHERE state = 'RUNNING')             AS running_jobs
         FROM jobs
-        WHERE tenant_id = ANY(${tenantSlugs}) AND deleted_at IS NULL
+        WHERE tenant_id = ANY(${scopedTenantSlugs}) AND deleted_at IS NULL
       `
     : [{ job_count: 0, active_jobs: 0, retrying_jobs: 0, failed_jobs: 0, running_jobs: 0 }];
 
   const tenants = await Promise.all(tenantRows.map((t) => formatTenantSummary(t, claims)));
+  const scheduler = await readSchedulerSummary(sql, scopedTenantSlugs);
 
   return {
     tenants,
@@ -159,7 +173,7 @@ async function buildDashboardSummary(claims, tenantId) {
       failedJobs: Number(counts[0].failed_jobs),
       runningJobs: Number(counts[0].running_jobs)
     },
-    scheduler: { leader: null, leaderExpiresAt: null, instances: [], instanceCount: 0, metrics: {} },
+    scheduler,
     jobs: jobs.map((job) => ({
       id: job.id,
       tenantId: job.tenant_id,
@@ -174,10 +188,173 @@ async function buildDashboardSummary(claims, tenantId) {
       createdAt: job.created_at,
       updatedAt: job.updated_at,
       nextRunAt: job.next_run_at,
-      historyCount: 0,
+      historyCount: Number(job.history_count),
       lastError: job.last_error
     }))
   };
+}
+
+async function readSchedulerSummary(sql, tenantSlugs) {
+  const metrics = await readSchedulerMetrics(sql, tenantSlugs);
+
+  try {
+    const leader = await readRedisLeader();
+    if (!leader.instanceId) {
+      return { leader: null, leaderExpiresAt: null, instances: [], instanceCount: 0, metrics };
+    }
+
+    const now = new Date();
+    const leaderExpiresAt = leader.ttlMs > 0
+      ? new Date(now.getTime() + leader.ttlMs).toISOString()
+      : null;
+
+    return {
+      leader: leader.instanceId,
+      leaderExpiresAt,
+      instances: [{
+        instanceId: leader.instanceId,
+        schedulerPort: config.schedulerPort,
+        leader: true,
+        lastSeenAt: now.toISOString()
+      }],
+      instanceCount: 1,
+      metrics
+    };
+  } catch {
+    return { leader: null, leaderExpiresAt: null, instances: [], instanceCount: 0, metrics };
+  }
+}
+
+async function readRedisLeader() {
+  const redisUrl = new URL(config.redisUrl);
+  const host = redisUrl.hostname || "127.0.0.1";
+  const port = Number(redisUrl.port || 6379);
+  const password = redisUrl.password ? decodeURIComponent(redisUrl.password) : null;
+  const dbIndex = redisUrl.pathname && redisUrl.pathname !== "/"
+    ? Number(redisUrl.pathname.slice(1))
+    : 0;
+
+  const replies = await sendRedisCommands({ host, port, password, dbIndex }, [
+    ["GET", schedulerLeaderKey],
+    ["PTTL", schedulerLeaderKey],
+    ["GET", schedulerLeaderElectionsKey]
+  ]);
+
+  return {
+    instanceId: replies[0] || null,
+    ttlMs: typeof replies[1] === "number" ? replies[1] : -1,
+    leaderElectionsTotal: Number(replies[2] || 0)
+  };
+}
+
+async function readSchedulerMetrics(sql, tenantSlugs) {
+  const eventScope = tenantSlugs.length > 0
+    ? await sql`
+        SELECT
+          COUNT(*) AS jobs_dispatched_total,
+          COUNT(*) FILTER (WHERE attempt > 1) AS retry_attempts_total
+        FROM event_log
+        WHERE tenant_id = ANY(${tenantSlugs})
+      `
+    : [{ jobs_dispatched_total: 0, retry_attempts_total: 0 }];
+
+  let leaderElectionsTotal = 0;
+  try {
+    const leader = await readRedisLeader();
+    leaderElectionsTotal = Number(leader.leaderElectionsTotal || 0);
+  } catch {
+    leaderElectionsTotal = 0;
+  }
+
+  return {
+    leaderElectionsTotal,
+    jobsDispatchedTotal: Number(eventScope[0].jobs_dispatched_total),
+    retryAttemptsTotal: Number(eventScope[0].retry_attempts_total)
+  };
+}
+
+function sendRedisCommands(connection, commands) {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host: connection.host, port: connection.port });
+    const replies = [];
+    let buffer = Buffer.alloc(0);
+    const queue = [];
+
+    if (connection.password) {
+      queue.push(["AUTH", connection.password]);
+    }
+    if (connection.dbIndex > 0) {
+      queue.push(["SELECT", String(connection.dbIndex)]);
+    }
+    queue.push(...commands);
+
+    socket.setTimeout(2000);
+
+    socket.on("connect", () => {
+      socket.write(queue.map(encodeRedisCommand).join(""));
+    });
+
+    socket.on("data", (chunk) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      while (true) {
+        const parsed = parseRedisReply(buffer);
+        if (!parsed) break;
+        buffer = parsed.rest;
+        replies.push(parsed.value);
+        if (replies.length === queue.length) {
+          socket.end();
+          resolve(replies.slice(queue.length - commands.length));
+          return;
+        }
+      }
+    });
+
+    socket.on("timeout", () => {
+      socket.destroy(new Error("Redis request timed out"));
+    });
+
+    socket.on("error", reject);
+  });
+}
+
+function encodeRedisCommand(parts) {
+  return `*${parts.length}\r\n${parts.map((part) => `$${Buffer.byteLength(part)}\r\n${part}\r\n`).join("")}`;
+}
+
+function parseRedisReply(buffer) {
+  if (buffer.length === 0) return null;
+
+  const type = String.fromCharCode(buffer[0]);
+  if (type === "+" || type === "-" || type === ":") {
+    const end = buffer.indexOf("\r\n");
+    if (end === -1) return null;
+    const raw = buffer.subarray(1, end).toString();
+    if (type === "-") {
+      throw new Error(raw);
+    }
+    return {
+      value: type === ":" ? Number(raw) : raw,
+      rest: buffer.subarray(end + 2)
+    };
+  }
+
+  if (type === "$") {
+    const end = buffer.indexOf("\r\n");
+    if (end === -1) return null;
+    const size = Number(buffer.subarray(1, end).toString());
+    if (size === -1) {
+      return { value: null, rest: buffer.subarray(end + 2) };
+    }
+    const bodyStart = end + 2;
+    const bodyEnd = bodyStart + size;
+    if (buffer.length < bodyEnd + 2) return null;
+    return {
+      value: buffer.subarray(bodyStart, bodyEnd).toString(),
+      rest: buffer.subarray(bodyEnd + 2)
+    };
+  }
+
+  throw new Error(`Unsupported Redis reply type: ${type}`);
 }
 
 async function handleListJobs(response, tenantId, url) {

@@ -118,9 +118,16 @@ Migration and seed steps that must be present in README:
 4. **Verification steps:** Provide explicit tests (stop leader, ensure failover occurs within TTL; run job that crashes to confirm no duplicates; inspect event log entries for attempts). Record mission-critical metrics/traces to monitor (leader elections count, job dispatch latency, retry count) for SLO reporting.
 
 ## Sprint 4 - Observability & roadmap execution
+### Status
+- In progress.
+- A minimal dashboard implementation is now planned as a near-term operational surface, using server-rendered static assets from the Management API to avoid adding a frontend toolchain before the data model settles.
+- Immediate implementation references:
+  - Management API dashboard summary endpoint: `management-api/server.js`
+  - Static dashboard assets: `management-api/public/`
+
 1. **Observability section details:** List Grafana panel specs (leader status, job throughput, retry ratio), Prometheus alerts (`scheduler_leader_elections_total` > 1/min, retry spike, job dispatch failure), and span expectations (trigger span per job from scheduler to worker). Assign alert owners (scheduler team, docs team) and maintenance cadence (weekly review of dashboards).
 2. **Roadmap tasks turned into deliverables:** For each roadmap bullet, break into tasks with acceptance criteria:
-   - Web UI dashboard: design mockup, implement React UI, connect to Management API, ensure dashboard shows job health metrics.
+   - Web UI dashboard: deliver a minimal operational dashboard first, then expand only after the scheduler and storage model stabilize.
    - Job dependency chains: define schema for dependencies, implement scheduler logic to enforce ordering, add tests for `run-after` semantics.
    - Tenant rate limiting: define rate tokens per tenant, implement guard rails in Management API and scheduler, include observability metrics for rate limit breaches.
    - Webhook notifications: design notification payload, implement worker webhook delivery with retries, document webhook signing and validation steps.
@@ -128,11 +135,35 @@ Migration and seed steps that must be present in README:
 3. **Operations/runbook:** Describe deployment steps on Railway (env vars, secrets, how to scale scheduler instances), rollback plan, and how to update README/plan when features ship (update plan file, note latch with release tag). Include monitoring steps verifying branch status after deployment.
 4. **Next steps & maintenance:** Detail how to keep the plan current (assign owner, link to sprint board, mention when to revisit the plan), describe how to track sprint completion (tick checklist, note issues), and instructions for updating this plan document whenever requirements change.
 
+### Dashboard delivery track
+1. **Phase 1 - Minimal operational UI**
+   - Serve static dashboard files directly from the Management API at `/`.
+   - Add a dashboard summary endpoint that returns tenant counts, job status counts, scheduler metrics, and recent jobs from the current JSON-backed store.
+   - Add a tenant listing endpoint so the UI can switch context without shell commands.
+   - Provide forms for creating tenants and jobs with the existing bearer-token model and idempotency-key requirements.
+   - Acceptance criteria:
+     - A user can open the dashboard in a browser with no extra install step.
+     - A user can create a tenant, create a job, switch tenant scope, and inspect recent job history.
+     - A user can see scheduler leader state, election count, retries, and dispatch totals.
+2. **Phase 2 - Better operator workflow**
+   - Add job detail refresh, delete or pause actions, and inline history filtering.
+   - Add scheduler health probes for multiple instances once the scheduler exposes a stable multi-instance status surface.
+   - Add validation hints for cron syntax and payload JSON.
+   - Acceptance criteria:
+     - Most manual API smoke tests can be driven from the dashboard.
+     - The UI remains dependency-light and works with the local dev stack.
+3. **Phase 3 - Production-grade frontend decision**
+   - Reassess whether a dedicated React app is worth the extra build tooling after storage and auth are no longer prototype-only.
+   - If adopted, keep the same API contracts and migrate incrementally instead of replacing the dashboard all at once.
+   - Acceptance criteria:
+     - Frontend framework choice is driven by product complexity, not by setup preference alone.
+
 ## Test Plan
 - Follow the "Getting Started verification" checklist from Sprint 1 to ensure README/setup instructions are accurate.
 - Use the expanded API reference to manually create a job and tenant via HTTP calls; verify RBAC/tenant isolation errors match the documented responses.
 - Execute scheduler failover simulations and invalid job handling to confirm the instrumentation/metrics in Sprint 3 behave as described.
 - Validate each Sprint 4 roadmap task through quick smoke tests (UI panel renders, dependency chain executes, rate limit triggers, webhook notifications deliver, CLI commands run). Document results in this plan file.
+- For the dashboard track, verify `/` loads, `/dashboard` returns a summary for the current token scope, tenant and job creation forms succeed, and recent history updates after the scheduler executes a job.
 
 ## Assumptions & Notes
 - Plan creation and updates occur in this file; implementation of the described steps happens in future sprints.

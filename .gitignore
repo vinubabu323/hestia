@@ -2,3 +2,10 @@ node_modules/
 .env
 data/*.json
 !data/.gitkeep
+.full-review/
+.claude/
+docs/
+ui/node_modules/
+ui/dist/
+ui/.env
+why-hestia.md

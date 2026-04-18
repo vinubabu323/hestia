@@ -12,19 +12,19 @@ A lightweight distributed job scheduler built as a zero-new-infrastructure alter
 - TypeScript SDK plus REST and WebSocket clients provide tenant-aware job configuration, live status, and audit trail notifications.
 - The client layer talks to the Management API for job and tenant management and listens for updates pushed over WebSocket or gRPC streams.
 
-### Management API (NestJS + Prisma)
-- Handles job CRUD, tenant configuration, rate limits, RBAC, and exposes REST, WebSocket, and gRPC endpoints for both the UI or CLI and the scheduler.
+### Management API (Node.js + SQL migrations)
+- Handles job CRUD, tenant configuration, rate limits, RBAC, and exposes REST endpoints for the UI and local tooling.
 - Maintains tenant metadata, job schemas, and prepares payloads for the scheduler while keeping PostgreSQL as the single source of truth.
 
 ### Scheduler Core (Go)
 - Leader election and cron ticking live here. Redis locks plus PostgreSQL event logs ensure a single scheduler instance dispatches jobs, and retries follow a defined state machine.
-- Dispatches jobs over gRPC to workers, tracks idempotency keys, and writes every state transition into PostgreSQL for visibility and auditing.
+- Dispatches jobs to workers over HTTP, tracks idempotency keys, and writes every state transition into PostgreSQL for visibility and auditing.
 
 ### Workers
 - Go worker - handles HTTP webhooks and shell commands.
 - NestJS worker - performs transactional database work, notifications, and integrations.
 - Python worker - runs data scripts and long-running payloads that benefit from the Python ecosystem.
-- Each worker type reports execution status back to the scheduler over gRPC so locks are released and success or failure is recorded in the event log.
+- The checked-in local worker is a lightweight HTTP mock worker used by the scheduler during development.
 
 ### Data and Coordination
 - PostgreSQL is the primary store for jobs, tenants, and the event log. Schema migrations live alongside the Management API and scheduler.
@@ -43,7 +43,7 @@ On every cron tick, the leader queries PostgreSQL for jobs due to run. Before ex
 Each job follows a simple flow: `PENDING -> RUNNING -> SUCCESS` or `FAILED -> RETRYING`. Failures use exponential backoff with jitter. The max retry count is configurable per job. Every state transition is written to the PostgreSQL event log with timestamp, duration, attempt number, and failure reason.
 
 ### Worker Pool
-Workers are separate services that receive dispatched jobs over gRPC. Each worker type handles a different job category:
+Workers are separate services that receive dispatched jobs from the scheduler. Each worker type handles a different job category:
 - **Go worker** - HTTP webhook calls and shell command execution
 - **NestJS worker** - database operations and notification delivery
 - **Python worker** - script execution and data processing tasks
@@ -87,7 +87,7 @@ Workers are separate services that receive dispatched jobs over gRPC. Each worke
 |---|---|---|---|---|
 | `DATABASE_URL` | PostgreSQL connection string used by the Management API, scheduler, and workers. | `postgresql://user:pass@localhost:5432/hestia_dev` | Yes | `npx prisma migrate deploy` succeeds |
 | `REDIS_URL` | Redis endpoint for leader election, job locks, and idempotency keys. | `redis://localhost:6379/0` | Yes | Scheduler connects during `docker compose up` |
-| `GRPC_PORT` | Port exposed by the scheduler for worker traffic and metrics. | `4000` | Yes | `http://localhost:4000/metrics` responds |
+| `WORKER_URL` | HTTP endpoint the scheduler calls to execute jobs. | `http://127.0.0.1:4100` | Yes | `GET /health` succeeds on the worker |
 | `JWT_SECRET` | Shared secret for signing and validating Management API tokens. | `replace-with-secure-secret` | Yes | API starts without auth config errors |
 | `WEBHOOK_SECRET` | Secret used to sign outgoing webhook notifications. | `webhook-shared-secret` | Optional | Webhook worker can generate signatures |
 | `WEBHOOK_TOKEN` | Token used when downstream webhook endpoints require bearer auth. | `replace-with-webhook-token` | Optional | Outbound webhook test includes expected auth header |
@@ -129,25 +129,24 @@ Workers are separate services that receive dispatched jobs over gRPC. Each worke
    ```
 4. Confirm the main local endpoints:
    - Management API: `http://localhost:3000`
-   - Scheduler metrics: `http://localhost:4000/metrics`
-   - Grafana: `http://localhost:3001`
+   - Mock worker health: `http://localhost:4100/health`
 
 ### Getting Started verification checklist
-1. Clone the repo and prepare `.env` with `DATABASE_URL`, `REDIS_URL`, `GRPC_PORT`, and `JWT_SECRET`.
+1. Clone the repo and prepare `.env` with `DATABASE_URL`, `REDIS_URL`, `WORKER_URL`, and `JWT_SECRET`.
 2. Run `npx prisma migrate deploy` from `management-api`.
 3. Run `npx prisma db seed` from `management-api`.
 4. Run `go build ./cmd/...` from `scheduler`.
 5. Start `docker compose up` and wait for all services to report healthy startup logs.
 6. Visit `http://localhost:3000` and confirm the Management API responds.
-7. Visit `http://localhost:4000/metrics` and confirm Prometheus metrics are exposed.
+7. Visit `http://localhost:4100/health` and confirm the worker responds.
 8. Create a sample tenant and job, then confirm the scheduler writes an event log entry.
 
 ### Troubleshooting
 - **Missing environment variables:** services exit early with config validation errors. Inspect `docker compose logs management-api`, `docker compose logs scheduler`, or the relevant worker logs.
 - **Migrations not applied:** Prisma reports migration drift or missing tables. Re-run `npx prisma migrate deploy` before restarting containers.
-- **Ports already in use:** Docker reports bind failures for `3000`, `3001`, or `4000`. Stop the conflicting process or remap the port in Compose.
+- **Ports already in use:** Docker reports bind failures for `3000` or `4100`. Stop the conflicting process or remap the port in Compose.
 - **Redis or PostgreSQL unreachable:** containers loop on reconnect attempts. Verify hostnames, credentials, and exposed ports in `.env` and Compose config.
-- **Worker dispatch failures:** scheduler logs show gRPC or lock errors and jobs remain pending or retrying. Inspect scheduler logs first, then the specific worker container.
+- **Worker dispatch failures:** scheduler logs show HTTP or lock errors and jobs remain pending or retrying. Inspect scheduler logs first, then the specific worker container.
 
 ### Seed a first tenant and job
 Use the API to create a sample tenant and a job after the stack is running:

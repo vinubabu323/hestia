@@ -9,6 +9,7 @@ import (
 )
 
 const leaderKey = "scheduler:leader"
+const leaderElectionsKey = "scheduler:metrics:leader_elections_total"
 
 type Election struct {
 	rdb        *redis.Client
@@ -70,6 +71,7 @@ func (e *Election) tick(ctx context.Context) {
 	}
 	if ok == "OK" {
 		e.isLeader = true
+		e.rdb.Incr(ctx, leaderElectionsKey)
 		fmt.Printf("leader: %s acquired leadership\n", e.instanceID)
 	}
 }

@@ -23,22 +23,34 @@ export default function App() {
     setLog({ text, payload })
   }, [])
 
-  const refreshDashboard = useCallback(async ({ tokenOverride, tenantOverride } = {}) => {
+  const refreshDashboard = useCallback(async ({ tokenOverride, tenantOverride, silent = false } = {}) => {
     const t = tokenOverride ?? token
     const tenant = tenantOverride ?? selectedTenant
     try {
       const summary = await fetchDashboard(t, tenant || null)
       setDashboardState(summary)
       setSelectedTenant((prev) => prev || summary.selectedTenant || '')
-      logMessage('Dashboard refreshed.', summary.overview)
+      if (!silent) {
+        logMessage('Dashboard refreshed.', summary.overview)
+      }
     } catch (err) {
-      logMessage(`Refresh failed: ${err.message}`)
+      if (!silent) {
+        logMessage(`Refresh failed: ${err.message}`)
+      }
     }
   }, [token, selectedTenant, logMessage])
 
   useEffect(() => {
     refreshDashboard()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      refreshDashboard({ silent: true })
+    }, 5000)
+
+    return () => window.clearInterval(intervalId)
+  }, [refreshDashboard])
 
   function handleTokenChange(newToken) {
     setToken(newToken)

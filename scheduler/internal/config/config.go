@@ -8,7 +8,7 @@ import (
 type Config struct {
 	DatabaseURL       string
 	RedisURL          string
-	GRPCWorkerAddr    string
+	WorkerURL         string
 	TickMs            int
 	LeaderTTLMs       int
 	LeaderRenewMs     int
@@ -19,7 +19,7 @@ func Load() Config {
 	return Config{
 		DatabaseURL:       mustEnv("DATABASE_URL"),
 		RedisURL:          mustEnv("REDIS_URL"),
-		GRPCWorkerAddr:    mustEnv("GRPC_WORKER_ADDR"),
+		WorkerURL:         mustEnv("WORKER_URL"),
 		TickMs:            envInt("SCHEDULER_TICK_MS", 2000),
 		LeaderTTLMs:       envInt("LEADER_TTL_MS", 10000),
 		LeaderRenewMs:     envInt("LEADER_RENEW_MS", 6000),

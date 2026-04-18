@@ -23,9 +23,18 @@ export default function CreateTenantForm({ token, onLog, onRefresh, onTenantCrea
 
   return (
     <form className="stack" onSubmit={handleSubmit}>
-      <input name="name" type="text" placeholder="Acme Corp" required />
-      <input name="slug" type="text" placeholder="acme-corp" required />
-      <input name="rateLimitPerMinute" type="number" min="1" defaultValue="120" required />
+      <label>
+        Tenant Name
+        <input name="name" type="text" placeholder="Acme Corp" required />
+      </label>
+      <label>
+        Tenant Slug
+        <input name="slug" type="text" placeholder="acme-corp" required />
+      </label>
+      <label>
+        Rate Limit Per Minute
+        <input name="rateLimitPerMinute" type="number" min="1" defaultValue="120" required />
+      </label>
       <button type="submit">Create Tenant</button>
     </form>
   )

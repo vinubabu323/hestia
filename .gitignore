@@ -8,3 +8,4 @@ docs/
 ui/node_modules/
 ui/dist/
 ui/.env
+why-hestia.md

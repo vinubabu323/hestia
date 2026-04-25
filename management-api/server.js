@@ -10,6 +10,7 @@ import { runMigrations } from "./migrate.js";
 
 const schedulerLeaderKey = "scheduler:leader";
 const schedulerLeaderElectionsKey = "scheduler:metrics:leader_elections_total";
+const schedulerInstanceKeyPattern = "scheduler:instance:*";
 
 function getClaims(request) {
   const authHeader = request.headers.authorization || "";
@@ -199,25 +200,16 @@ async function readSchedulerSummary(sql, tenantSlugs) {
 
   try {
     const leader = await readRedisLeader();
-    if (!leader.instanceId) {
-      return { leader: null, leaderExpiresAt: null, instances: [], instanceCount: 0, metrics };
-    }
-
-    const now = new Date();
+    const instances = await readRedisSchedulerInstances(leader.instanceId);
     const leaderExpiresAt = leader.ttlMs > 0
-      ? new Date(now.getTime() + leader.ttlMs).toISOString()
+      ? new Date(Date.now() + leader.ttlMs).toISOString()
       : null;
 
     return {
-      leader: leader.instanceId,
+      leader: leader.instanceId || null,
       leaderExpiresAt,
-      instances: [{
-        instanceId: leader.instanceId,
-        schedulerPort: config.schedulerPort,
-        leader: true,
-        lastSeenAt: now.toISOString()
-      }],
-      instanceCount: 1,
+      instances,
+      instanceCount: instances.length,
       metrics
     };
   } catch {
@@ -226,15 +218,7 @@ async function readSchedulerSummary(sql, tenantSlugs) {
 }
 
 async function readRedisLeader() {
-  const redisUrl = new URL(config.redisUrl);
-  const host = redisUrl.hostname || "127.0.0.1";
-  const port = Number(redisUrl.port || 6379);
-  const password = redisUrl.password ? decodeURIComponent(redisUrl.password) : null;
-  const dbIndex = redisUrl.pathname && redisUrl.pathname !== "/"
-    ? Number(redisUrl.pathname.slice(1))
-    : 0;
-
-  const replies = await sendRedisCommands({ host, port, password, dbIndex }, [
+  const replies = await sendRedisCommands(getRedisConnection(), [
     ["GET", schedulerLeaderKey],
     ["PTTL", schedulerLeaderKey],
     ["GET", schedulerLeaderElectionsKey]
@@ -245,6 +229,44 @@ async function readRedisLeader() {
     ttlMs: typeof replies[1] === "number" ? replies[1] : -1,
     leaderElectionsTotal: Number(replies[2] || 0)
   };
+}
+
+async function readRedisSchedulerInstances(leaderInstanceId) {
+  const connection = getRedisConnection();
+  const keys = await sendRedisCommands(connection, [
+    ["KEYS", schedulerInstanceKeyPattern]
+  ]);
+  const instanceKeys = Array.isArray(keys[0]) ? keys[0].sort() : [];
+  if (instanceKeys.length === 0) {
+    return [];
+  }
+
+  const payloads = await sendRedisCommands(
+    connection,
+    instanceKeys.map((key) => ["GET", key])
+  );
+
+  return payloads
+    .map((payload) => {
+      if (!payload) return null;
+      try {
+        const parsed = JSON.parse(payload);
+        return {
+          instanceId: parsed.instanceId,
+          schedulerPort: Number(parsed.schedulerPort || config.schedulerPort),
+          leader: parsed.instanceId === leaderInstanceId,
+          lastSeenAt: parsed.lastSeenAt || null
+        };
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .sort((left, right) => {
+      if (left.leader && !right.leader) return -1;
+      if (!left.leader && right.leader) return 1;
+      return left.instanceId.localeCompare(right.instanceId);
+    });
 }
 
 async function readSchedulerMetrics(sql, tenantSlugs) {
@@ -354,7 +376,39 @@ function parseRedisReply(buffer) {
     };
   }
 
+  if (type === "*") {
+    const end = buffer.indexOf("\r\n");
+    if (end === -1) return null;
+    const count = Number(buffer.subarray(1, end).toString());
+    if (count === -1) {
+      return { value: null, rest: buffer.subarray(end + 2) };
+    }
+
+    let rest = buffer.subarray(end + 2);
+    const items = [];
+    for (let index = 0; index < count; index += 1) {
+      const parsed = parseRedisReply(rest);
+      if (!parsed) return null;
+      items.push(parsed.value);
+      rest = parsed.rest;
+    }
+
+    return { value: items, rest };
+  }
+
   throw new Error(`Unsupported Redis reply type: ${type}`);
+}
+
+function getRedisConnection() {
+  const redisUrl = new URL(config.redisUrl);
+  return {
+    host: redisUrl.hostname || "127.0.0.1",
+    port: Number(redisUrl.port || 6379),
+    password: redisUrl.password ? decodeURIComponent(redisUrl.password) : null,
+    dbIndex: redisUrl.pathname && redisUrl.pathname !== "/"
+      ? Number(redisUrl.pathname.slice(1))
+      : 0
+  };
 }
 
 async function handleListJobs(response, tenantId, url) {

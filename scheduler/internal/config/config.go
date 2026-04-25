@@ -9,6 +9,7 @@ type Config struct {
 	DatabaseURL       string
 	RedisURL          string
 	WorkerURL         string
+	SchedulerPort     int
 	TickMs            int
 	LeaderTTLMs       int
 	LeaderRenewMs     int
@@ -20,6 +21,7 @@ func Load() Config {
 		DatabaseURL:       mustEnv("DATABASE_URL"),
 		RedisURL:          mustEnv("REDIS_URL"),
 		WorkerURL:         mustEnv("WORKER_URL"),
+		SchedulerPort:     envInt("GRPC_PORT", 4000),
 		TickMs:            envInt("SCHEDULER_TICK_MS", 2000),
 		LeaderTTLMs:       envInt("LEADER_TTL_MS", 10000),
 		LeaderRenewMs:     envInt("LEADER_RENEW_MS", 6000),

@@ -50,7 +50,7 @@ func main() {
 	s := store.New(pool)
 
 	election := leader.New(
-		rdb, instanceID,
+		rdb, instanceID, cfg.SchedulerPort,
 		time.Duration(cfg.LeaderTTLMs)*time.Millisecond,
 		time.Duration(cfg.LeaderRenewMs)*time.Millisecond,
 	)

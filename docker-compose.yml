@@ -1,19 +1,67 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: hestia_dev
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: root
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hestia_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  pgadmin:
+    image: dpage/pgadmin4:8
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   management-api:
     image: node:22-alpine
     working_dir: /app
-    command: ["node", "management-api/server.js"]
+    command: ["sh", "-c", "npm install && node management-api/server.js"]
     env_file:
       - .env
     environment:
       API_PORT: 3000
+      DATABASE_URL: postgresql://postgres:root@postgres:5432/hestia_dev
+      REDIS_URL: redis://redis:6379/0
       WORKER_URL: http://worker:4100
     volumes:
       - ./:/app
     ports:
       - "3000:3000"
     depends_on:
-      - worker
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      worker:
+        condition: service_started
 
   scheduler:
     image: golang:1.25-alpine
@@ -22,18 +70,25 @@ services:
     env_file:
       - .env
     environment:
-      API_PORT: 3000
+      DATABASE_URL: postgresql://postgres:root@postgres:5432/hestia_dev
+      REDIS_URL: redis://redis:6379/0
       WORKER_URL: http://worker:4100
     volumes:
       - ./:/app
     depends_on:
-      - management-api
-      - worker
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      management-api:
+        condition: service_started
+      worker:
+        condition: service_started
 
   worker:
     image: node:22-alpine
     working_dir: /app
-    command: ["node", "workers/mock-worker/server.js"]
+    command: ["sh", "-c", "npm install && node workers/mock-worker/server.js"]
     env_file:
       - .env
     environment:
@@ -42,3 +97,22 @@ services:
       - ./:/app
     ports:
       - "4100:4100"
+
+  ui:
+    image: node:22-alpine
+    working_dir: /app/ui
+    command: ["sh", "-c", "npm install && npm run dev -- --host 0.0.0.0"]
+    environment:
+      VITE_API_URL: http://localhost:3000
+    volumes:
+      - ./:/app
+    ports:
+      - "5173:5173"
+    depends_on:
+      management-api:
+        condition: service_started
+
+volumes:
+  postgres-data:
+  redis-data:
+  pgadmin-data:

@@ -2,6 +2,7 @@ package leader
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -10,19 +11,28 @@ import (
 
 const leaderKey = "scheduler:leader"
 const leaderElectionsKey = "scheduler:metrics:leader_elections_total"
+const instanceKeyPrefix = "scheduler:instance:"
 
 type Election struct {
 	rdb        *redis.Client
 	instanceID string
+	port       int
 	ttl        time.Duration
 	renewEvery time.Duration
 	isLeader   bool
 }
 
-func New(rdb *redis.Client, instanceID string, ttl, renewEvery time.Duration) *Election {
+type heartbeatPayload struct {
+	InstanceID    string `json:"instanceId"`
+	SchedulerPort int    `json:"schedulerPort"`
+	LastSeenAt    string `json:"lastSeenAt"`
+}
+
+func New(rdb *redis.Client, instanceID string, port int, ttl, renewEvery time.Duration) *Election {
 	return &Election{
 		rdb:        rdb,
 		instanceID: instanceID,
+		port:       port,
 		ttl:        ttl,
 		renewEvery: renewEvery,
 	}
@@ -48,6 +58,8 @@ func (e *Election) Run(ctx context.Context) {
 }
 
 func (e *Election) tick(ctx context.Context) {
+	e.publishHeartbeat(ctx)
+
 	if e.isLeader {
 		// Renew: only update if we still own the key
 		ok, err := e.rdb.SetArgs(ctx, leaderKey, e.instanceID, redis.SetArgs{
@@ -74,4 +86,17 @@ func (e *Election) tick(ctx context.Context) {
 		e.rdb.Incr(ctx, leaderElectionsKey)
 		fmt.Printf("leader: %s acquired leadership\n", e.instanceID)
 	}
+}
+
+func (e *Election) publishHeartbeat(ctx context.Context) {
+	payload, err := json.Marshal(heartbeatPayload{
+		InstanceID:    e.instanceID,
+		SchedulerPort: e.port,
+		LastSeenAt:    time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return
+	}
+
+	e.rdb.Set(ctx, instanceKeyPrefix+e.instanceID, payload, e.ttl)
 }
